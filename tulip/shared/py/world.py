@@ -1,45 +1,20 @@
 # T U L I P ~ W O R L D
 # a Tulip only chat room and file transfer service
 
-import os
-import ubinascii as ub
-import urequests
+import urequests as requests
 import json
+import os
 import tulip
-import time 
 
-# TODO: i should verify Tulip-ness some other way . I can revoke this token easily enough but why not do it per user?
-world_token = "syt_dHVsaXA_lPADiXCwKdCJvreALSul_0ody9J"
-host = "duraflame.rosaline.org"
-room_id = "!rGPkdYQOECXDlTVoGe:%s" % (host)
-files_room_id = "!MuceoboBAfueEttdFw:%s" % (host)
-firmware_room_id = "!eMmMZLncsdKrMOFTMM:%s" % (host)
-last_message = None
+def read_in_chunks(file_object, chunk_size=4096):
+    while True:
+        data = file_object.read(chunk_size)
+        if not data:
+            break
+        yield data
 
-# micropython version of uuid from micropython-lib
-class UUID:
-    def __init__(self, bytes):
-        if len(bytes) != 16:
-            raise ValueError('bytes arg must be 16 bytes long')
-        self._bytes = bytes
-
-    @property
-    def hex(self):
-        return ub.hexlify(self._bytes).decode()
-
-    def __str__(self):
-        h = self.hex
-        return '-'.join((h[0:8], h[8:12], h[12:16], h[16:20], h[20:32]))
-
-    def __repr__(self):
-        return "<UUID: %s>" % str(self)
-
-def uuid4():
-    """Generates a random UUID compliant to RFC 4122 pg.14"""
-    random = bytearray(os.urandom(16))
-    random[6] = (random[6] & 0x0F) | 0x40
-    random[8] = (random[8] & 0x3F) | 0x80
-    return UUID(bytes=random)
+def _isdir(filename):
+    return (os.stat(filename)[0] & 0o40000) > 0
 
 # covert age from matrix to something readable
 def nice_time(age_s):
@@ -56,167 +31,179 @@ def nice_time(age_s):
     c = c + " ago"
     return "% 8s" % c
 
-# PUT call to matrix CS api using auth
-def matrix_put(url, data):
-    return urequests.put(url, data=bytes(json.dumps(data).encode('utf-8')), headers={"Authorization":"Bearer %s" %(world_token)})
 
-# GET call to matrix CS api using auth
-def matrix_get(url):
-    return urequests.get(url, headers={"Authorization":"Bearer %s" %(world_token)})
 
-def matrix_post(url, data, content_type="application/octet-stream"):
-    return urequests.post(url, data=data, headers={"Authorization":"Bearer %s" %(world_token), "Content-Type":content_type})
+# This is the token for the Tulip World app. 
+# it only has perms to be able to read and post to the private Tulip World channels on the SPSS discord
+# if there's any abuse of this, i can revoke the token
+ta = 'MTIzOTIyNTc4NDU3NzgxODc0NQ.GjGMum'
+tb = 'KvPGzKZDr1phrId9iY7LMtIDgMNtI0om8MsWsA'
+text_channel_id = "1239226672046407824" # tulip-world channel
+files_channel_id = "1239512482025050204" # tulip-world-files channel
 
-def _isdir(filename):
-    return (os.stat(filename)[0] & 0o40000) > 0
+# Discord HTTP API stuff
+text_base_url = "https://discordapp.com/api/channels/{}/".format(text_channel_id)
+files_base_url = "https://discordapp.com/api/channels/{}/".format(files_channel_id)
+headers = { "Authorization":"Bot {}".format(ta+'.'+tb),
+            "User-Agent":"TulipCC/4.0 (https://tulip.computer, v0.1)",
+            "Content-Type":"application/json", }
 
-def read_in_chunks(file_object, chunk_size=4096):
-    while True:
-        data = file_object.read(chunk_size)
-        if not data:
-            break
-        yield data
+discord_epoch = 1420070400000
 
-# Uploads a file or folder from Tulip to Tulip World
-def upload(filename, content_type="application/octet-stream", room_id=files_room_id):
+# get the last n messages
+def messages(n=500, chunk_size = 100, mtype='text'):
+    ret = []
+    before = None
+
+    base_url = files_base_url
+    if(mtype == 'text'): base_url = text_base_url
+
+    # First one is the newest
+    # https://discord.com/developers/docs/resources/channel#get-channel-messages
+    if(n<chunk_size): chunk_size = n
+    response = requests.get(base_url+"messages?limit=%d" % (chunk_size), headers = headers)
+    # We get a x-ratelimit-reset from the headers here, we can use that to know what time it is
+    # We have to do it this way because (1) micropython does not have datetime/dateutil
+    # and (2) we often do not know what time it is on Tulip 
+    server_time_ms = (int(response.headers['x-ratelimit-reset'])-1)*1000
+
+    # Pull up to n messages from discord, using paging
+    all_responses = response.json()
+    while(len(all_responses)<n and len(response.json())==chunk_size):
+        oldest_id = response.json()[-1]['id']
+        response = requests.get(base_url+"messages?limit=%d&before=%s" % (chunk_size, oldest_id), headers=headers)
+        all_responses = all_responses + response.json()
+
+
+    for i in all_responses[:n]:
+        try:
+            # Discord trims spaces at the end of content
+            if(i['content'].endswith('#')): i['content']=i['content']+' '
+            (username, content) = i['content'].split(" ### ")
+        except ValueError: # not a valid TW message / file
+            continue
+        r = {
+            # Discord IDs have epoch ms (since 2015) encoded in them
+            'age_ms':server_time_ms - ((int(i['id']) >> 22) + discord_epoch), 
+            'username':username,
+            'content':content
+        }
+        if mtype=='text' and len(i['attachments']) == 0:
+            ret.append(r)
+
+        if mtype=='files' and len(i['attachments']) > 0:
+            a = i['attachments'][0]
+            r.update({
+                'filename':a['filename'], 
+                'size':a['size'], 
+                'url':a['url'], 
+                'content_type':a['content_type']
+            })
+            ret.append(r)
+    return ret
+
+def download(filename, username=None, limit=5000, chunk_size=4096):
+    got = None
+    # Check for an extension
+    if('.' not in filename[-5:]):
+        filename = filename + ".tar"
+    for file in messages(n=limit, mtype='files'):
+        if(file["filename"] == filename):
+            if username is None or username==file['username']:
+                got = file
+                break
+    if got is not None:
+        age_nice = nice_time(got["age_ms"]/1000)
+        grab_url = got["url"] # Will get the latest (most recent) file with that name
+
+        r = tulip.url_save(got['url'], filename)
+
+        print("Downloaded %s by %s [%d bytes, last updated %s] from Tulip World." % (filename,got['username'], got['size'], age_nice.lstrip()))
+        if(filename.endswith('.tar')):
+            print("Unpacking %s. Run it with run('%s')" % (filename, filename[:-4]))
+            tulip.tar_extract(filename, show_progress=False)
+            os.remove(filename)
+    else:
+        if(username is None):
+            print("Could not find %s on Tulip World" % (filename))
+        else:
+            print("Could not find %s by %s on Tulip World" % (filename, username))
+
+
+def ls(count=10): # lists latest count files
+    already = {}
+    i = 0
+    all_files = messages(n=count, mtype='files')
+    for f in all_files:
+        fn = f['username']+':'+f["filename"]
+        if(not fn in already):
+            already[fn] = True
+            if(f['filename'].endswith(".tar")):
+                f['filename'] = "<%s>" % (f['filename'][:-4])
+            print("% 20s % 10s % 20s %s" % (f['filename'], f['username'][:10], f['content'][:20], nice_time(f["age_ms"]/1000)))
+            i+=1
+        if(i==count): break     
+
+# uploads a file
+def upload(filename, username, description=""):
+    if(len(username)<1 or len(username)>10):
+        print("Username %s too long or short." % username)
+        return
+
     tar = False
-    url = "https://%s/_matrix/media/v3/upload?filename=%s" % (host, filename)
-    #tulip.display_stop()
     if(_isdir(filename)):
         tar = True
         print("Packing %s" % (filename))
         tulip.tar_create(filename)
         filename += ".tar"
-    #contents = open(filename,"rb").read()
-    #uri = matrix_post(url, contents, content_type=content_type).json()["content_uri"]
 
-    file = open(filename, "rb")
-    uri = matrix_post(url, read_in_chunks(file), content_type=content_type).json()["content_uri"]
+    filesize = os.stat(filename)[6]
+    f = open(filename, 'rb')
 
-    #tulip.display_start()
-    # Now make an event / message
-    data={"info":{"mimetype":content_type},"msgtype":"m.file","body":filename,"url":uri}
-    url="https://%s/_matrix/client/v3/rooms/%s/send/%s/%s" % (host, room_id, "m.room.message", str(uuid4()))
-    matrix_put(url, data)
+    # First get the url to upload to
+    api_response = requests.post(
+        files_base_url+"attachments",
+        headers=headers,
+        json={"files": [{"filename": filename, "file_size": filesize, "id": 1}]},
+    )
+
+    # Then PUT the file to the url
+    attachment_info = api_response.json()["attachments"][0]
+    put_url = attachment_info["upload_url"]
+    put_response = requests.put(
+        put_url,
+        headers={
+            "Authorization": headers['Authorization'],
+            "User-Agent": headers['User-Agent'],
+            "Content-Length": str(filesize),
+            "Content-Type": "application/octet-stream",
+        },
+        data=f,
+    )
+
+    # Lastly, post a message with the uploaded filename
+    payload = {
+        "content":username[:10] + " ### " + description[:25],
+        "attachments": [{
+            "id": attachment_info['id'],
+            "uploaded_filename":attachment_info['upload_filename'],
+            "filename":filename
+        }]
+    }
+    r = requests.post(files_base_url+"messages", headers = headers, data = json.dumps(payload))
+
     print("Uploaded %s to Tulip World." % (filename))
     if(tar):
         os.remove(filename)
 
-# returns all the files within limit
-def files(limit=5000, room_id=files_room_id): 
-    f = []
-    url = "https://%s/_matrix/client/r0/rooms/%s/initialSync?limit=%d" % (host,room_id,limit)
-    data = matrix_get(url)
-    grab_url = None
-    for e in data.json()['messages']['chunk']:
-        if(e['type']=='m.room.message'):
-            if('url' in e['content']):
-                f.append({'url':e["content"]["url"], 'age_ms':e['age'], 'filename':e['content']['body']})
-    return f
 
-def ls(count=10): # lists latest count files
-    already = {}
-    i = 0
-    all_files = files()
-    all_files.reverse()
-    for f in all_files:
-        fn = f["filename"]
-        if(not fn in already):
-            already[fn] = True
-            if(fn.endswith(".tar")):
-                fn = "< %s >" % (fn[:-4])
-            print("\t% 40s %s" % (fn, nice_time(f["age_ms"]/1000)))
-            i+=1
-        if(i==count): break 
-
-# Convenience function that just grabs the __last__ file named filename from Tulip World. Does full initial sync to find it
-# Or, you can give it an item from files(), if you want a specific file and not look it up by filename
-def download(filename, limit=5000, chunk_size=4096):
-    grab_url = None
-    if(type(filename)==dict): # this is a item in the files() list
-        grab_url = filename["url"]
-        age_nice = nice_time(filename["age_ms"]/1000)
-        filename = filename["filename"]
-    else: # was a filename search 
-        # Check for an extension
-        if('.' not in filename[-5:]):
-            filename = filename + ".tar"
-        for file in files(limit=limit):
-            if(file["filename"] == filename):
-                age_nice = nice_time(file["age_ms"]/1000)
-                grab_url = file["url"] # Will get the latest (most recent) file with that name
-
-    if(grab_url is not None):
-        mxc_id = grab_url[6:]
-        url = "https://%s/_matrix/media/r0/download/%s" % (host, mxc_id)
-
-        #tulip.display_stop()
-        r = matrix_get(url)
-        b = r.save(filename, chunk_size=chunk_size)
-        #tulip.display_start()
-
-        print("Downloaded %s [%d bytes, last updated %s] from Tulip World." % (filename, b, age_nice.lstrip()))
-        if(filename.endswith('.tar')):
-            print("Unpacking %s. Run it with run('%s')" % (filename, filename[:-4]))
-            tulip.tar_extract(filename, show_progress=False)
-            os.remove(filename)
-
-    else:
-        print("Could not find %s on Tulip World" % (filename))
-
-# Send a m.room.message to the tulip room
-def send(message):
-    data={"msgtype":"m.text","body":message}
-    url="https://%s/_matrix/client/v3/rooms/%s/send/%s/%s" % (host, room_id, "m.room.message", str(uuid4()))
-    matrix_put(url, data)
-
-# Return new messages since the last check
-def check(limit=1000):
-    global last_message
-    if(last_message is None):
-        url = "https://%s/_matrix/client/r0/rooms/%s/initialSync?limit=%d" % (host,room_id,limit)
-    else:
-        url = "https://%s/_matrix/client/r0/rooms/%s/messages?from=%s&dir=f&limit=%d" % (host, room_id, last_message, limit)
-    data = matrix_get(url)
-    m = []
-    if 'messages' in data.json():
-        last_message = data.json()['messages']['end']
-        for e in data.json()['messages']['chunk']:
-            if(e['type']=='m.room.message'):
-                if('body' in e['content']):
-                    m.append({"body":e['content']['body'], "age_s":int(e['age']/1000)})
-    return m
-
-
-
-def put_message(m):
-    row = "     " + nice_time(m["age_s"]) + ": " + m["body"]
-    print(row[:100])
-    if(len(row) > 100):
-        # word wrap
-        for i in range(int(len(row)/100)- 1):
-            print("               " + row[(i+1)*100:(i+2)*100])
-
-
-def world_ui():
-    tulip.gpu_reset()
-    print(tulip.Colors.INVERSE + "Welcome to T U L I P ~ W O R L D")
-    print(tulip.Colors.DEFAULT)
-    tulip.roundrect(20,20,950,500,20,145)
-    tulip.roundrect(20,520,950,80,20,145)
-
-# sets up the UI for world
-def world():
-    if(tulip.ip() is None):
-        print("need wifi.")
+def post_message(message, username):
+    if(len(username)<1 or len(username)>10):
+        print("Username %s too long or short." % username)
         return
+    r = requests.post(text_base_url+"messages", headers = headers, data =  json.dumps ( {"content":username[:10] + " ### " + message} ))
 
-    world_ui() # set up the world UI
 
-    # Get the initial set of n last messages
-    m = check()
-    for i in m:
-        put_message(i)
 
 
 

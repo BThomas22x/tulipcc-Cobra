@@ -31,7 +31,7 @@ if [ "$TYPE" == "sys" ]; then
 fi
 
 # Otherwise, compile all boards. If upload set, upload them
-declare -a boards=("TULIP4_R10" "MATOUCH7" "N16R8" "N32R8" "TDECK")
+declare -a boards=("TULIP4_R10" "N16R8" "N32R8" "TDECK")
 for i in "${boards[@]}"
 do
     rm -rf build
@@ -40,6 +40,7 @@ do
     if [ "$TYPE" == "upload" ]; then
         python upload_firmware.py
         gh release upload --clobber $RELEASE dist/tulip-full-$i.bin
+        gh release upload --clobber $RELEASE dist/tulip-firmware-$i.bin
     fi
 done
 

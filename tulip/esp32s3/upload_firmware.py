@@ -47,13 +47,15 @@ def matrix_put(url, data):
 
 # Uploads a file or folder from Tulip to Tulip World
 def upload(filename, content_type="application/octet-stream"):
-    url = "https://%s/_matrix/media/v3/upload?filename=%s" % (host, filename)
-    file = open(filename, "rb").read()
-    uri = matrix_post(url, file, content_type=content_type).json()["content_uri"]
-    data={"info":{"mimetype":content_type},"msgtype":"m.file","body":filename,"url":uri}
-    url="https://%s/_matrix/client/v3/rooms/%s/send/%s/%s" % (host, firmware_room_id, "m.room.message", str(uuid4()))
-    matrix_put(url, data)
-    print("Uploaded %s to Tulip World." % (filename))
+    # Don't upload this here anymore after the next release, we use github releases
+    if 1:
+        url = "https://%s/_matrix/media/v3/upload?filename=%s" % (host, filename)
+        file = open(filename, "rb").read()
+        uri = matrix_post(url, file, content_type=content_type).json()["content_uri"]
+        data={"info":{"mimetype":content_type},"msgtype":"m.file","body":filename,"url":uri}
+        url="https://%s/_matrix/client/v3/rooms/%s/send/%s/%s" % (host, firmware_room_id, "m.room.message", str(uuid4()))
+        matrix_put(url, data)
+        print("Uploaded %s to Tulip World." % (filename))
 
 
 

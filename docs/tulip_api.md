@@ -53,7 +53,7 @@ usage = tulip.cpu() # or use tulip.cpu(1) to show more detail in a connected UAR
 
 ms = tulip.ticks_ms() # returns the milliseconds since boot, aka Arduino millis() 
 
-board = tulip.board() # Returns the board type, e.g. "TDECK", "MATOUCH7", "N16R8" etc
+board = tulip.board() # Returns the board type, e.g. "TDECK", "N16R8" etc
 ```
 
 If you have a program that relies on mulitple files (graphics, or multiple Python files) you'll want to create a Tulip Package. A package is just a folder with your files in it, like:
@@ -66,7 +66,7 @@ rabbit_game/
 ... rabbit_pic1.png
 ```
 
-The main Python script must be the name of the package. This script needs to explicitly `import tulip,amy` if you are using those. Then, your users can start the package by `run('rabbit_game')`. The package will be cleaned up after when they exit. The Tulip World BBS supports uploading and downloading packages as tar files: just `world.upload('package')` or `world.download('package')`. 
+The main Python script must be the name of the package. This script needs to explicitly `import tulip,amy` if you are using those. Then, your users can start the package by `run('rabbit_game')`. The package will be cleaned up after when they exit. The Tulip World BBS supports uploading and downloading packages as tar files: just `world.upload('package', username)` or `world.download('package')`. 
 
 We put a few system packages in `/sys/app`, and if you `run('app')`, it will look both in your current folder and the `/sys/app` folder for the app. 
 
@@ -88,21 +88,23 @@ You can call the underlying Tulip World APIs:
 
 ```python
 import world
-messages = world.check() # returns a list of latest messages since your last call
-world.send("hello!!") # Sends a message to Tulip World
+messages = world.messages(n=500, mtype='files') # returns a list of latest files (not unique ones)
+messages = world.messages(n=100, mtype='text') # returns a list of latest chat messages
 
-world.upload(filename) # Uploads a file to Tulip World 
-world.upload(folder) # Packages a folder and uploads it to Tulip World as a package
+# When posting messages or files you set a username, minimum 1 character, maximum 10 
+world.post_message("hello!!", username) # Sends a message to Tulip World. username required.
+
+world.upload(filename, username, description) # Uploads a file to Tulip World. username required. description optional (25 characters)
+world.upload(folder, username, description) # Packages a folder and uploads it to Tulip World as a package
 world.download(filename) # Downloads the latest file named filename from Tulip World if it exists
+world.download(filename, username) # Downloads the latest file named filename from username from Tulip World if it exists
 world.download(package_name) # Downloads a package and extracts it
 
-files = world.files(limit=5000) # returns the most recent N files (including versions with the same name) for selective download
-world.download(files[0]) # download a specific file instead
-
-world.ls() # lists most recent unique filenames
+world.ls() # lists most recent unique filenames/usernames
+world.ls(100) # optional count (most recent)
 ```
 
-Big note: Tulip World is powered by a [Matrix](https://matrix.org) instance that I run. I can't guarantee anything about its uptime, and if there's any abuse of the system, I'll revoke the key. I'd love more help making Tulip World a more stable and fun experience for everyone. 
+Big note: Tulip World is hosted by a bot running on the SPSS Discord. If there's any abuse of the system, I'll revoke the key. I'd love more help making Tulip World a more stable and fun experience for everyone. 
 
 
 ## The Tulip Editor
@@ -214,6 +216,14 @@ tulip.key_scan(0) # remember to turn it back off or you won't be able to type in
 tulip.remap()  # interactive, can write to your boot.py for you
 tulip.key_remap(scan_code, modifier, target_cp437_code)
 
+# You can also register a keyboard callback. Useful for full screen apps that share with others
+# there can only be one keyboard callback running. 
+tulip.keyboard_callback(key)
+def key(k):
+    print("got key: %d" % (key))
+
+tulip.keyboard_callback() # removes callbacks. 
+
 # Return the last touch panel coordinates, up to 3 fingers at once
 (x0, y0, x1, y1, x2, y2) = tulip.touch()
 
@@ -266,7 +276,7 @@ tulip.set_time()
 
 ## Music / sound
 
-Tulip comes with the AMY synthesizer, a very full featured 120-oscillator synth that supports FM, PCM, additive synthesis, partial synthesis, filters, and much more. See the [AMY documentation](https://github.com/bwhitman/amy/blob/main/README.md) for more information, Tulip's version of AMY comes with stereo sound, chorus and reverb. It includes a "small" version of the PCM patch set (29 patches) alongside all the Juno-6 and DX7 patches.
+Tulip comes with the AMY synthesizer, a very full featured 120-oscillator synth that supports FM, PCM, additive synthesis, partial synthesis, filters, and much more. See the [AMY documentation](https://github.com/bwhitman/amy/blob/main/README.md) for more information, Tulip's version of AMY comes with stereo sound, chorus and reverb. It includes a "small" version of the PCM patch set (29 patches) alongside all the Juno-6 and DX7 patches. It also has support for loading WAVE files in Tulip as samples. 
 
 Once connected to Wi-Fi, Tulip can also control or respond to an [Alles mesh.](https://github.com/bwhitman/alles/blob/main/README.md) Alles is a wrapper around AMY that lets you control the synthesizer over Wi-Fi to remote speakers, or other computers or Tulips. Connect any number of Alles speakers to the wifi to have instant surround sound! See the Alles [getting started tutorial](https://github.com/bwhitman/alles/blob/main/getting-started.md) for more information and for more music examples.
 
@@ -293,7 +303,24 @@ amy.send(voices='0', load_patch=101, note=50, vel=1, client=2) # just a certain 
 alles.local() # turns off mesh mode and goes back to local mode
 ```
 
-Tuilp's Alles synth includes a stereo chorus unit which has a set of control parameters:
+To load your own WAVE files as samples, use `tulip.load_sample`:
+
+```python
+# To save space / RAM, you may want to downsample your WAVE files to 22050Hz. We detect SR automatically.
+patch = tulip.load_sample("flutea4.wav") # samples are converted to mono if they are stereo
+
+# You can optionally tell us the loop start and end point (in samples), and base MIDI note of the sample.
+patch = tulip.load_sample("flutea4.wav", midinote=81, loopstart=1020, loopend=1500)
+
+# The patch number can now be used in the custom Tulip memory PCM sample player. 
+# It has all the features of the AMY's PCM wave type.
+amy.send(osc=20, wave=amy.CUSTOM, patch=patch, vel=1, note=50)
+
+# You can load up to 32 custom PCM patches. Be careful of memory use. load_sample will return -1 if there's no more room.
+# You can unload already allocated patches:
+tulip.unload_patch(patch) # frees the RAM and the patch slot
+tulip.unload_patch() # frees all allocated PCM patches
+```
 
 Tulip also ships with our own [`music.py`](https://github.com/bwhitman/tulipcc/blob/main/tulip/shared/py/music.py), which lets you create chords, progressions and scales through code:
 
@@ -308,9 +335,9 @@ for i,note in enumerate(chord.midinotes()):
 
 Tulip is always running a live sequencer, meant for music programs you write to share a common clock. This allows you to have multiple music programs running that respond to a callback to play notes. 
 
-To use the clock in your code, you should first register on the music callback with `tulip.seq_add_callback(my_callback)`. You can remove your callback with `tulip.seq_remove_callback(my_callback)`.  You can remove all callbacks with `tulip.seq_remove_callbacks()`. We support up to 4 callbacks running at once. 
+To use the clock in your code, you should first register on the music callback with `slot = tulip.seq_add_callback(my_callback)`. You can remove your callback with `tulip.seq_remove_callback(slot)`.  You can remove all callbacks with `tulip.seq_remove_callbacks()`. We support up to 8 callbacks running at once. 
 
-When adding a callback, there's an optional second parameter to denote a divider on the system level parts-per-quarter timer (currently defaults at 48). If you run `tulip.seq_add_callback(my_callback, 6)`, it would call your function `my_callback` every 6th "tick", so 8 times a quarter note at a PPQ of 48. The default divider is `tulip.seq_ppq()`, so if you don't set it, your callback will activate once a quarter note. 
+When adding a callback, there's an optional second parameter to denote a divider on the system level parts-per-quarter timer (currently defaults at 48). If you run `slot = tulip.seq_add_callback(my_callback, 6)`, it would call your function `my_callback` every 6th "tick", so 8 times a quarter note at a PPQ of 48. The default divider is `tulip.seq_ppq()`, so if you don't set it, your callback will activate once a quarter note. 
 
 By default, your callback will receive a message 50 milliseconds ahead of the time of the intended tick, with the parameters `my_callback(intended_time_ms)`. This is so that you can take extra CPU time to prepare to send messages at the precise time, using AMY scheduling commands, to keep in perfect sync. You can set this "lookahead" globally for all callbacks if you want more or less latency with `tulip.seq_latency(X)` or get it with `tulip.seq_latency()`. 
 
@@ -339,13 +366,14 @@ You can also send MIDI messages "locally", e.g. to a running program that is exp
 ```python
 tulip.music_map(1,129) # change MIDI channel 1 to patch 129.
 
-def callback(x): # for now you have to define a callback with a dummy parameter
+def callback():
     m = tulip.midi_in()
     if(m[0]==144):
         print("Note on, note # %d velocity # %d" % (m[1], m[2]))
 
-tulip.midi_callback(callback)
-tulip.midi_callback() # turns off callbacks
+tulip.midi_add_callback(callback)
+tulip.midi_remove_callback(callback) # turns off callback
+tulip.midi_remove_callbacks() # turns off all
 
 m = tulip.midi_in() # returns bytes of the last MIDI message received
 tulip.midi_out((144,60,127)) # sends a note on message

@@ -170,15 +170,13 @@ https://user-images.githubusercontent.com/76612/215896311-fc0823aa-44bc-4305-85d
 
 ### Tulip World
 
-Still very much early days, but Tulip supports a native chat and file sharing BBS called **T U L I P ~ W O R L D** where you can hang out with other Tulip owners. You're able to pull down the latest messages and files and send messages and files yourself. 
+Still very much early days, but Tulip supports a native chat and file sharing BBS called **T U L I P ~ W O R L D** where you can hang out with other Tulip owners. You're able to pull down the latest messages and files and send messages and files yourself. More in the [full API](docs/tulip_api.md).
 
 ```python
 import world
-messages = world.check() # returns a list of latest messages since your last call
-world.send("hello!!") # Sends a message to Tulip World
-world.upload(filename) # Uploads a file to Tulip World 
-world.download(filename) # Downloads the latest file named filename from Tulip World if it exists
-world.ls() # lists most recent unique filenames
+world.post_message("hello!!", username) # Sends a message to Tulip World. username required.
+world.upload(filename, username) # Uploads a file to Tulip World. username required
+world.ls() # lists most recent unique filenames/usernames
 ```
 
 ## How to build, compile and help develop Tulip
